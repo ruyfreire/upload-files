@@ -24,7 +24,7 @@ KAFKA_TOPIC="${KAFKA_TOPIC:-csv.processed}"
 KAFKA_BROKERS_LAMBDA="${KAFKA_BROKERS_LAMBDA:-host.docker.internal:19093}"
 
 LAMBDA_ENDPOINT="${LAMBDA_ENDPOINT:-http://localhost.localstack.cloud:4566}"
-WEBHOOK_TOKEN="${WEBHOOK_TOKEN:-token-estudo}"
+WEBHOOK_TOKEN="${WEBHOOK_TOKEN:-token-test}"
 WEBHOOK_URL="${WEBHOOK_URL:-https://webhook.site/853bdadd-9ebf-42b2-b33e-7d7b6a959922}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

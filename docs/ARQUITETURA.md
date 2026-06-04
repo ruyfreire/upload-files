@@ -212,7 +212,7 @@ Para erros de CLI genéricos (SQS URLs, Lambda Pending, put-log-events), ver [`C
 
 ## Limitações LocalStack Hobby vs AWS real
 
-| Área | LocalStack (estudo) | AWS produção |
+| Área | LocalStack | AWS produção |
 |------|---------------------|--------------|
 | IAM | Enforcement fraca | Políticas efetivas no runtime |
 | Persistência | Recursos somem ao reiniciar container | Persistente por padrão |

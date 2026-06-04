@@ -21,7 +21,7 @@ ARTIFACTS_BUCKET="${ARTIFACTS_BUCKET:-csv-cfn-artifacts}"
 LAMBDA_KEY="${LAMBDA_KEY:-csv-processor.zip}"
 
 WEBHOOK_URL="${WEBHOOK_URL:-https://webhook.site/853bdadd-9ebf-42b2-b33e-7d7b6a959922}"
-WEBHOOK_TOKEN="${WEBHOOK_TOKEN:-token-estudo}"
+WEBHOOK_TOKEN="${WEBHOOK_TOKEN:-token-test}"
 LAMBDA_ENDPOINT="${LAMBDA_ENDPOINT:-http://localhost.localstack.cloud:4566}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

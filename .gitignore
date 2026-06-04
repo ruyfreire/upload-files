@@ -5,3 +5,5 @@ api/dist/
 .env
 *.zip
 .DS_Store
+.cursor/
+.vscode/

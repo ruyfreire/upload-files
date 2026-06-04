@@ -1,5 +1,5 @@
 /**
- * Lambda csv-processor — estudo LocalStack/AWS
+ * Lambda csv-processor — LocalStack/AWS
  *
  * Fluxo:
  *  1. Recebe evento SQS (mensagem veio do SNS com RawMessageDelivery)
@@ -43,7 +43,7 @@ const TABLE_NAME = process.env.DYNAMODB_TABLE || "CsvRecords";
 const KAFKA_BROKERS = (process.env.KAFKA_BROKERS || "host.docker.internal:19093").split(",");
 const KAFKA_TOPIC = process.env.KAFKA_TOPIC || "csv.processed";
 
-/** Header esperado no CSV de estudo (arquivo.csv na raiz do repo) */
+/** Header esperado no CSV (arquivo.csv na raiz do repo) */
 const EXPECTED_HEADER = ["nome", "data", "valor"];
 
 function getBodyParsed(body) {
@@ -91,7 +91,7 @@ async function parseCsvStream(readableStream) {
 }
 
 /**
- * Versão sync mantida apenas para estudo.
+ * Versão sync mantida apenas para referência.
  * É simples para arquivos pequenos, mas carrega todo o CSV em memória antes de parsear.
  */
 function parseCsvSync(content) {

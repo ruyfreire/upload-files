@@ -1,5 +1,5 @@
 # =============================================================================
-# CloudFormation — pipeline CSV de estudo (LocalStack / AWS)
+# CloudFormation — pipeline CSV (LocalStack / AWS)
 # =============================================================================
 # Espelha os mesmos recursos do scripts/bootstrap.sh, mas de forma DECLARATIVA.
 # Sem SAM/CDK transforms — YAML puro para compatibilidade com LocalStack Hobby.
@@ -7,7 +7,7 @@
 # Deploy: scripts/deploy-cfn.sh (empacota Lambda → S3 → cloudformation deploy)
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Pipeline CSV de estudo — S3, SNS, SQS ingest, Lambda, DynamoDB, Kafka (env), Secrets Manager
+Description: Pipeline CSV — S3, SNS, SQS ingest, Lambda, DynamoDB, Kafka (env), Secrets Manager
 
 # -----------------------------------------------------------------------------
 # Parâmetros — valores injetados pelo deploy-cfn.sh
@@ -31,7 +31,7 @@ Parameters:
   WebhookToken:
     Type: String
     Description: Token Bearer enviado no header Authorization
-    Default: token-estudo
+    Default: token-test
 
   LambdaEndpoint:
     Type: String

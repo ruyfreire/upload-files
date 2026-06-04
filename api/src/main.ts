@@ -2,7 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
 /**
- * Entrypoint da API de estudo.
+ * Entrypoint da API.
  * Porta 3000; CORS liberado para testes com curl/browser.
  */
 async function bootstrap() {

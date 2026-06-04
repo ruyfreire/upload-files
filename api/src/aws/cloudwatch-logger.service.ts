@@ -26,7 +26,7 @@ export class CloudWatchLoggerService {
   constructor(@Inject(AWS_CLIENTS) aws: AwsClients) {
     this.cwClient = aws.cloudWatchLogs;
     this.logGroupName = aws.config.logGroupName;
-    // Um stream por instância da API (facilita rastrear sessão de estudo)
+    // Um stream por instância da API (facilita rastrear sessão)
     this.streamName = `api-${randomUUID().slice(0, 8)}`;
   }
 

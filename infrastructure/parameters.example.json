@@ -13,7 +13,7 @@
   },
   {
     "ParameterKey": "WebhookToken",
-    "ParameterValue": "token-estudo"
+    "ParameterValue": "token-test"
   },
   {
     "ParameterKey": "LambdaEndpoint",

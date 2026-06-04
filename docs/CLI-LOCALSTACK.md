@@ -3,11 +3,11 @@
 ## Metadados da sessão
 
 - **Data:** 2026-06-02
-- **LocalStack:** versão `2026.5.1`, edition `pro`
+- **LocalStack:** versão `2026.5.1`
 - **Persistência:** `disabled` (recursos somem ao reiniciar o container)
 - **Região:** `us-east-1`
 - **Credenciais:** `test` / `test`
-- **Ambiente:** WSL2 (Ubuntu), endpoint `http://127.0.0.1:4566`
+- **Ambiente:** Ubuntu, endpoint `http://127.0.0.1:4566`
 - **CLI:** `awslocal` (aws-cli/2.34.58)
 - **Health (serviços testados):** s3, sns, sqs, lambda, dynamodb, secretsmanager, iam, logs, cloudformation — todos `running`/`available`
 
@@ -86,7 +86,7 @@ awslocal dynamodb scan --table-name cli-test-records
 ```bash
 awslocal secretsmanager create-secret \
   --name cli-test/webhook \
-  --secret-string '{"token":"token-estudo","webhookUrl":"https://webhook.site/exemplo-cli-test"}'
+  --secret-string '{"token":"token-test","webhookUrl":"https://webhook.site/exemplo-cli-test"}'
 awslocal secretsmanager get-secret-value --secret-id cli-test/webhook
 ```
 

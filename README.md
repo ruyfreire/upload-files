@@ -1,4 +1,4 @@
-# Pipeline CSV com LocalStack — projeto de estudo AWS
+# Pipeline CSV com LocalStack
 
 Projeto didático que simula um pipeline de upload e processamento de CSV usando serviços AWS locais via [LocalStack](https://localstack.cloud/). Inclui **dois métodos de provisionamento** (shell imperativo e CloudFormation declarativo) para comparar abordagens.
 
@@ -61,7 +61,7 @@ Sobe **Kafka** (passo 0) e provisiona **LocalStack** em um único comando:
 # Pré-requisito: LocalStack em :4566
 # Opcional: configure webhook real antes do bootstrap
 export WEBHOOK_URL=https://webhook.site/SEU-UUID
-export WEBHOOK_TOKEN=token-estudo
+export WEBHOOK_TOKEN=token-test
 
 bash scripts/bootstrap.sh
 ```
@@ -142,7 +142,7 @@ awslocal logs tail /study/csv-pipeline --since 10m
 ```bash
 awslocal secretsmanager put-secret-value \
   --secret-id study/webhook \
-  --secret-string '{"token":"token-estudo","webhookUrl":"https://webhook.site/SEU-UUID"}'
+  --secret-string '{"token":"token-test","webhookUrl":"https://webhook.site/SEU-UUID"}'
 ```
 
 3. Reinicie a API (para limpar cache do secret) e faça novo upload.

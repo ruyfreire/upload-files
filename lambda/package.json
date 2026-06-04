@@ -1,7 +1,7 @@
 {
   "name": "csv-processor",
   "version": "1.0.0",
-  "description": "Lambda de estudo: lê CSV do S3, grava no DynamoDB e publica resumo no Kafka",
+  "description": "Lambda: lê CSV do S3, grava no DynamoDB e publica resumo no Kafka",
   "main": "src/handler.js",
   "scripts": {
     "package": "bash scripts/package.sh"

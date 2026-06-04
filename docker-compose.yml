@@ -1,4 +1,4 @@
-# Apache Kafka KRaft (estudo local) — rede study-net
+# Apache Kafka KRaft — rede study-net
 # Subido automaticamente por scripts/bootstrap.sh e scripts/deploy-cfn.sh
 #
 # API (host WSL): localhost:19092 | Lambda (LocalStack): host.docker.internal:19093
