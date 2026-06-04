@@ -17,7 +17,7 @@ sequenceDiagram
     participant IngestQ as SQS_ingest
     participant Lambda
     participant DDB as DynamoDB
-    participant DoneQ as SQS_processed
+    participant Kafka as Kafka_csv_processed
     participant SM as SecretsManager
     participant CW as CloudWatchLogs
     participant Webhook as webhook_site
@@ -29,9 +29,9 @@ sequenceDiagram
     IngestQ->>Lambda: event source mapping
     Lambda->>S3: GetObject (Body stream)
     Lambda->>DDB: PutItem (linhas CSV)
-    Lambda->>DoneQ: SendMessage resumo
+    Lambda->>Kafka: produce resumo
     Lambda->>CW: logs automáticos
-    NestAPI->>DoneQ: sqs-consumer long polling
+    NestAPI->>Kafka: consumer group
     NestAPI->>SM: GetSecretValue token + URL
     NestAPI->>Webhook: POST com Authorization
     NestAPI->>CW: PutLogEvents rastreio
@@ -62,7 +62,8 @@ sequenceDiagram
 | S3 (artefatos CFN) | `csv-cfn-artifacts` | zip da Lambda |
 | SNS | `csv-upload-events` | `arn:aws:sns:us-east-1:000000000000:csv-upload-events` |
 | SQS ingest | `csv-ingest-queue` | URL impressa no bootstrap/outputs CFN |
-| SQS processed | `csv-processed-queue` | URL impressa no bootstrap/outputs CFN |
+| Kafka | tópico `csv.processed` | API `localhost:19092`; Lambda `host.docker.internal:19093` |
+| Kafka UI | — | `http://localhost:8080` |
 | DynamoDB | `CsvRecords` | PK: `id` (String) |
 | Lambda | `csv-processor` | runtime `nodejs18.x`, handler `handler.handler` |
 | IAM Role | `csv-processor-lambda-role` | trust: `lambda.amazonaws.com` |
@@ -78,7 +79,7 @@ sequenceDiagram
 | `BucketName` | Bucket S3 de uploads |
 | `SnsTopicArn` | ARN do tópico SNS |
 | `IngestQueueUrl` | Fila ingest → Lambda |
-| `ProcessedQueueUrl` | Fila processada → API |
+| `KafkaTopic` | Tópico com resumo processado |
 | `DynamoTableName` | Nome da tabela |
 | `SecretArn` | ARN do secret webhook |
 | `LogGroupName` | Log group da API |
@@ -97,7 +98,9 @@ Arquivo: `api/.env` (copiar de `api/.env.example`).
 | `AWS_SECRET_ACCESS_KEY` | Credencial LocalStack | `test` |
 | `S3_BUCKET` | Bucket de uploads | `csv-uploads` |
 | `SNS_TOPIC_ARN` | Tópico publicado após upload | ARN do bootstrap/CFN |
-| `PROCESSED_QUEUE_URL` | Fila consumida em background | URL SQS |
+| `KAFKA_BROKERS` | Broker Kafka (API no host) | `localhost:19092` |
+| `KAFKA_TOPIC` | Tópico consumido | `csv.processed` |
+| `KAFKA_GROUP_ID` | Consumer group | `csv-processed-api` |
 | `DYNAMODB_TABLE` | Tabela (referência) | `CsvRecords` |
 | `SECRET_NAME` | Secret do webhook | `study/webhook` |
 | `LOG_GROUP_NAME` | CloudWatch da API | `/study/csv-pipeline` |
@@ -109,7 +112,8 @@ Arquivo: `api/.env` (copiar de `api/.env.example`).
 |----------|----------------------|
 | `AWS_ENDPOINT_URL` | `http://localhost.localstack.cloud:4566` |
 | `DYNAMODB_TABLE` | `CsvRecords` |
-| `PROCESSED_QUEUE_URL` | URL da fila processed |
+| `KAFKA_BROKERS` | `host.docker.internal:19093` |
+| `KAFKA_TOPIC` | `csv.processed` |
 | `AWS_REGION` | `us-east-1` |
 
 ---
@@ -151,7 +155,7 @@ O código também mantém uma versão sync do parser apenas como referência did
 | `sns_published` | Após Publish no SNS |
 | `webhook_sent` | POST webhook.site OK |
 | `webhook_failed` | Falha no webhook (URL placeholder, rede, etc.) |
-| `message_received` | Consumer recebeu resumo da fila processada |
+| `message_received` | Consumer Kafka recebeu resumo |
 | `message_processing_failed` | Falha no handler do consumer (webhook, parse, etc.) |
 
 Consulta:
@@ -165,14 +169,16 @@ awslocal logs tail /aws/lambda/csv-processor --since 1h
 
 ## Comandos de teste do pipeline
 
+Pré-requisito: **LocalStack** em `http://127.0.0.1:4566`. O **Kafka** sobe automaticamente no bootstrap/deploy-cfn (passo 0).
+
 ```bash
-# 1. Provisionar (escolha um)
+# 1. Provisionar (escolha um) — inclui Kafka + tópico csv.processed
 bash scripts/bootstrap.sh
 # ou
 bash scripts/deploy-cfn.sh
 
 # 2. API
-cd api && npm run start:dev
+cd api && npm install && npm run start:dev
 
 # 3. Upload
 curl -F "file=@arquivo.csv" http://localhost:3000/upload
@@ -180,9 +186,15 @@ curl -F "file=@arquivo.csv" http://localhost:3000/upload
 # 4. Validar
 awslocal s3 ls s3://csv-uploads/uploads/
 awslocal dynamodb scan --table-name CsvRecords
+docker exec csv-study-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 --topic csv.processed --from-beginning --max-messages 5 --timeout-ms 5000
 awslocal logs tail /aws/lambda/csv-processor --since 10m
 awslocal logs tail /study/csv-pipeline --since 10m
 ```
+
+### Validação Kafka (2026-06-04)
+
+Fluxo E2E validado após integração: `bootstrap.sh` (passo 0 Kafka) → upload CSV → DynamoDB + mensagem no tópico + logs `kafka_produced` / `message_received`.
 
 ### Troubleshooting de aplicação
 
@@ -190,7 +202,8 @@ awslocal logs tail /study/csv-pipeline --since 10m
 |---------|----------------|------|
 | DynamoDB vazio após upload | Lambda não alcança LocalStack | Ajustar `AWS_ENDPOINT_URL` da Lambda para `localhost.localstack.cloud:4566` ou IP do container |
 | `webhook_failed` 404 | URL placeholder `SEU-UUID` | Atualizar secret `study/webhook` com URL real |
-| Consumer não recebe mensagens | `PROCESSED_QUEUE_URL` vazia no `.env` | Copiar URL dos outputs do bootstrap/CFN |
+| Consumer não recebe mensagens | `KAFKA_BROKERS` vazio ou Kafka parado | Rodar `bootstrap.sh`; `.env` com `localhost:19092` |
+| Lambda não publica no Kafka | listener errado | Lambda em `host.docker.internal:19093`; API em `localhost:19092` |
 | CFN falha em IAM | Capability não passada | `deploy-cfn.sh` já usa `--capabilities CAPABILITY_NAMED_IAM` |
 
 Para erros de CLI genéricos (SQS URLs, Lambda Pending, put-log-events), ver [`CLI-LOCALSTACK.md`](CLI-LOCALSTACK.md).
@@ -220,4 +233,5 @@ Para erros de CLI genéricos (SQS URLs, Lambda Pending, put-log-events), ver [`C
 4. **Webhook só na API** — Lambda não precisa de internet; reduz falhas de rede no Docker.
 5. **Dois caminhos de provisionamento** — comparar imperativo vs declarativo no mesmo conjunto de recursos.
 6. **CSV via stream com `csv-parse`** — parser mais robusto que `split`, com validação explícita do header e menor uso de memória em arquivos maiores.
-7. **Consumer SQS com `sqs-consumer`** — biblioteca recomendada para Node (BBC); encapsula long polling, delete após sucesso e retry via `visibilityTimeout`, em vez de loop manual com `ReceiveMessage`/`DeleteMessage`.
+7. **Resumo processado via Kafka (KRaft local)** — tópico `csv.processed`; Lambda publica com `kafkajs`; API consome com consumer group e commit após webhook OK. Em produção AWS, equivalente gerenciado: **Amazon MSK**.
+8. **Bootstrap único** — `bootstrap.sh` sobe Kafka (Docker Compose) e provisiona LocalStack no mesmo comando.

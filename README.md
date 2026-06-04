@@ -5,7 +5,7 @@ Projeto didático que simula um pipeline de upload e processamento de CSV usando
 ## Arquitetura em uma frase
 
 ```
-Cliente → API NestJS → S3 + SNS → SQS ingest → Lambda → DynamoDB + SQS processed → API → webhook.site
+Cliente → API NestJS → S3 + SNS → SQS ingest → Lambda → DynamoDB + Kafka → API → webhook.site
 ```
 
 Diagramas em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
@@ -15,6 +15,7 @@ Diagramas em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
 | Ferramenta | Uso |
 |------------|-----|
 | LocalStack (porta **4566**) | Emula S3, SNS, SQS, Lambda, DynamoDB, etc. |
+| Docker + Docker Compose | Apache Kafka KRaft (`docker-compose.yml`) |
 | `awslocal` | Wrapper da AWS CLI apontando para LocalStack |
 | Node.js 18+ | API NestJS e Lambda |
 | python3 | Empacotamento do zip da Lambda |
@@ -32,14 +33,15 @@ Referência de comandos CLI: [`docs/CLI-LOCALSTACK.md`](docs/CLI-LOCALSTACK.md).
 ```
 upload-files/
 ├── arquivo.csv              # CSV de exemplo (nome,data,valor)
-├── api/                     # API NestJS (upload, GET records, consumer SQS, webhook)
+├── api/                     # API NestJS (upload, GET records, consumer Kafka, webhook)
 ├── web/                     # Frontend Vite + React + shadcn (upload + tabela)
 ├── lambda/                  # Lambda Node.js (processa CSV)
 ├── infrastructure/          # template.yaml CloudFormation
-├── scripts/                 # bootstrap, destroy, deploy-cfn, destroy-cfn
+├── docker-compose.yml       # Apache Kafka KRaft + Kafka UI
+├── scripts/                 # bootstrap (Kafka+LocalStack), destroy, deploy-cfn
 └── docs/
     ├── CLI-LOCALSTACK.md    # referência awslocal
-    └── ARQUITETURA.md       # fluxo detalhado
+    ├── ARQUITETURA.md       # fluxo detalhado
 ```
 
 ## Escolha UM método de provisionamento
@@ -53,9 +55,10 @@ bash scripts/destroy-cfn.sh    # se usou CloudFormation
 
 ### Caminho A — Imperativo (`bootstrap.sh`)
 
-Cria recursos passo a passo via CLI (ideal para entender cada serviço):
+Sobe **Kafka** (passo 0) e provisiona **LocalStack** em um único comando:
 
 ```bash
+# Pré-requisito: LocalStack em :4566
 # Opcional: configure webhook real antes do bootstrap
 export WEBHOOK_URL=https://webhook.site/SEU-UUID
 export WEBHOOK_TOKEN=token-estudo
@@ -184,8 +187,8 @@ bash scripts/destroy-cfn.sh    # stack CloudFormation
 | S3 | `csv-uploads` | Armazena CSVs enviados |
 | SNS | `csv-upload-events` | Fan-out após upload |
 | SQS | `csv-ingest-queue` | Dispara Lambda |
-| SQS | `csv-processed-queue` | Resumo para a API |
-| Lambda | `csv-processor` | Parse CSV → DynamoDB |
+| Kafka | tópico `csv.processed` | Resumo processado → API |
+| Lambda | `csv-processor` | Parse CSV → DynamoDB → Kafka |
 | DynamoDB | `CsvRecords` | Uma linha = um item |
 | Secrets Manager | `study/webhook` | URL/token do webhook |
 | CloudWatch Logs | `/study/csv-pipeline` | Rastreio da API |

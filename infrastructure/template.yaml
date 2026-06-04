@@ -7,7 +7,7 @@
 # Deploy: scripts/deploy-cfn.sh (empacota Lambda → S3 → cloudformation deploy)
 # =============================================================================
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Pipeline CSV de estudo — S3, SNS, SQS, Lambda, DynamoDB, Secrets Manager
+Description: Pipeline CSV de estudo — S3, SNS, SQS ingest, Lambda, DynamoDB, Kafka (env), Secrets Manager
 
 # -----------------------------------------------------------------------------
 # Parâmetros — valores injetados pelo deploy-cfn.sh
@@ -38,6 +38,16 @@ Parameters:
     Description: Endpoint AWS para a Lambda (rede Docker interna)
     Default: http://localhost.localstack.cloud:4566
 
+  KafkaBrokers:
+    Type: String
+    Description: Bootstrap Kafka para a Lambda (rede Docker)
+    Default: host.docker.internal:19093
+
+  KafkaTopic:
+    Type: String
+    Description: Tópico Kafka com resumo processado
+    Default: csv.processed
+
 Resources:
   # ---------------------------------------------------------------------------
   # S3 — armazena uploads CSV
@@ -63,17 +73,12 @@ Resources:
       TopicName: csv-upload-events # Tópico que publica os eventos quando upload é realizado
 
   # ---------------------------------------------------------------------------
-  # SQS — fila de ingestão (SNS → Lambda) e fila processada (Lambda → API)
+  # SQS — fila de ingestão (SNS → Lambda)
   # ---------------------------------------------------------------------------
   IngestQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: csv-ingest-queue # Fila que recebe os eventos quando upload é realizado
-
-  ProcessedQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: csv-processed-queue # Fila que recebe os eventos quando o processamento é realizado
+      QueueName: csv-ingest-queue
 
   # Permite SNS publicar na fila de ingestão (necessário na AWS real)
   IngestQueuePolicy:
@@ -165,10 +170,6 @@ Resources:
                 Resource: !GetAtt CsvRecordsTable.Arn
               - Effect: Allow
                 Action:
-                  - sqs:SendMessage
-                Resource: !GetAtt ProcessedQueue.Arn
-              - Effect: Allow
-                Action:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
@@ -194,7 +195,8 @@ Resources:
         Variables:
           AWS_ENDPOINT_URL: !Ref LambdaEndpoint
           DYNAMODB_TABLE: !Ref CsvRecordsTable
-          PROCESSED_QUEUE_URL: !Ref ProcessedQueue
+          KAFKA_BROKERS: !Ref KafkaBrokers
+          KAFKA_TOPIC: !Ref KafkaTopic
           AWS_REGION: !Ref AWS::Region
 
   IngestEventSourceMapping:
@@ -221,9 +223,9 @@ Outputs:
     Description: URL da fila de ingestão
     Value: !Ref IngestQueue
 
-  ProcessedQueueUrl:
-    Description: URL da fila processada (consumer da API)
-    Value: !Ref ProcessedQueue
+  KafkaTopic:
+    Description: Tópico Kafka (resumo processado)
+    Value: !Ref KafkaTopic
 
   DynamoTableName:
     Description: Nome da tabela DynamoDB

@@ -28,9 +28,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TEMPLATE="${PROJECT_DIR}/infrastructure/template.yaml"
 
+KAFKA_TOPIC="${KAFKA_TOPIC:-csv.processed}"
+KAFKA_BROKERS_LAMBDA="${KAFKA_BROKERS_LAMBDA:-host.docker.internal:19093}"
+
+# shellcheck source=lib/kafka-local.sh
+source "${SCRIPT_DIR}/lib/kafka-local.sh"
+
 echo "=============================================="
 echo " Deploy CloudFormation — ${STACK_NAME}"
 echo "=============================================="
+
+if [[ "${SKIP_KAFKA:-0}" != "1" ]]; then
+  echo ""
+  echo "[0] Apache Kafka + tópico ${KAFKA_TOPIC}"
+  ensure_localstack_health
+  ensure_kafka_stack "${PROJECT_DIR}"
+  ensure_kafka_topic "${KAFKA_TOPIC}"
+fi
 
 # 1. Empacota Lambda
 echo ""
@@ -59,6 +73,8 @@ awslocal cloudformation deploy \
     "WebhookUrl=${WEBHOOK_URL}" \
     "WebhookToken=${WEBHOOK_TOKEN}" \
     "LambdaEndpoint=${LAMBDA_ENDPOINT}" \
+    "KafkaBrokers=${KAFKA_BROKERS_LAMBDA}" \
+    "KafkaTopic=${KAFKA_TOPIC}" \
   --no-fail-on-empty-changeset \
   --capabilities CAPABILITY_NAMED_IAM
 
@@ -84,8 +100,8 @@ SNS_ARN=$(awslocal cloudformation describe-stacks --stack-name "${STACK_NAME}" \
   --query "Stacks[0].Outputs[?OutputKey=='SnsTopicArn'].OutputValue" --output text)
 INGEST=$(awslocal cloudformation describe-stacks --stack-name "${STACK_NAME}" \
   --query "Stacks[0].Outputs[?OutputKey=='IngestQueueUrl'].OutputValue" --output text)
-PROCESSED=$(awslocal cloudformation describe-stacks --stack-name "${STACK_NAME}" \
-  --query "Stacks[0].Outputs[?OutputKey=='ProcessedQueueUrl'].OutputValue" --output text)
+KAFKA_TOPIC_OUT=$(awslocal cloudformation describe-stacks --stack-name "${STACK_NAME}" \
+  --query "Stacks[0].Outputs[?OutputKey=='KafkaTopic'].OutputValue" --output text)
 TABLE=$(awslocal cloudformation describe-stacks --stack-name "${STACK_NAME}" \
   --query "Stacks[0].Outputs[?OutputKey=='DynamoTableName'].OutputValue" --output text)
 LOG_GROUP=$(awslocal cloudformation describe-stacks --stack-name "${STACK_NAME}" \
@@ -101,8 +117,10 @@ AWS_SECRET_ACCESS_KEY=test
 S3_BUCKET=${BUCKET}
 SNS_TOPIC_ARN=${SNS_ARN}
 INGEST_QUEUE_URL=${INGEST}
-PROCESSED_QUEUE_URL=${PROCESSED}
 DYNAMODB_TABLE=${TABLE}
+KAFKA_BROKERS=localhost:19092
+KAFKA_TOPIC=${KAFKA_TOPIC_OUT}
+KAFKA_GROUP_ID=csv-processed-api
 SECRET_NAME=study/webhook
 LOG_GROUP_NAME=${LOG_GROUP}
 PORT=3000

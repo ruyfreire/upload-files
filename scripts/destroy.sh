@@ -14,7 +14,6 @@ export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 BUCKET="csv-uploads"
 TOPIC_NAME="csv-upload-events"
 INGEST_QUEUE="csv-ingest-queue"
-PROCESSED_QUEUE="csv-processed-queue"
 TABLE_NAME="CsvRecords"
 SECRET_NAME="study/webhook"
 LAMBDA_ROLE="csv-processor-lambda-role"
@@ -62,7 +61,7 @@ awslocal dynamodb delete-table --table-name "${TABLE_NAME}" 2>/dev/null && echo 
 
 # SQS
 echo "[6] SQS queues"
-for q in "${INGEST_QUEUE}" "${PROCESSED_QUEUE}"; do
+for q in "${INGEST_QUEUE}"; do
   URL=$(awslocal sqs get-queue-url --queue-name "${q}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
   if [[ -n "${URL}" && "${URL}" != "None" ]]; then
     awslocal sqs delete-queue --queue-url "${URL}" 2>/dev/null && echo "  -> ${q} removida." || true

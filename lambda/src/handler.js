@@ -5,15 +5,13 @@
  *  1. Recebe evento SQS (mensagem veio do SNS com RawMessageDelivery)
  *  2. Baixa o CSV do S3
  *  3. Valida header (nome,data,valor) e grava cada linha no DynamoDB
- *  4. Envia resumo para a fila csv-processed-queue
- *
- * Erros: log + throw → SQS faz retry (comportamento padrão AWS)
+ *  4. Publica resumo no tópico Kafka (csv.processed)
  */
 
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
-const { SQSClient, SendMessageCommand } = require("@aws-sdk/client-sqs");
+const { Kafka } = require("kafkajs");
 const { parse } = require("csv-parse");
 const { parse: parseSync } = require("csv-parse/sync");
 const { randomUUID } = require("crypto");
@@ -40,19 +38,14 @@ const awsClientConfig = {
 
 const s3 = new S3Client(awsClientConfig);
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient(awsClientConfig));
-const sqs = new SQSClient(awsClientConfig);
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || "CsvRecords";
-const PROCESSED_QUEUE_URL = process.env.PROCESSED_QUEUE_URL;
+const KAFKA_BROKERS = (process.env.KAFKA_BROKERS || "host.docker.internal:19093").split(",");
+const KAFKA_TOPIC = process.env.KAFKA_TOPIC || "csv.processed";
 
 /** Header esperado no CSV de estudo (arquivo.csv na raiz do repo) */
 const EXPECTED_HEADER = ["nome", "data", "valor"];
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Get Body parsed */
 function getBodyParsed(body) {
   try {
     if (typeof body !== "string") {
@@ -105,6 +98,30 @@ function parseCsvSync(content) {
   return parseSync(content, { columns: true, skip_empty_lines: true, trim: true });
 }
 
+async function publishSummaryToKafka(summary) {
+  if (!KAFKA_BROKERS.length || !KAFKA_TOPIC) {
+    throw new Error("KAFKA_BROKERS ou KAFKA_TOPIC não configurados");
+  }
+
+  const kafka = new Kafka({ clientId: "csv-processor", brokers: KAFKA_BROKERS });
+  const producer = kafka.producer();
+
+  try {
+    await producer.connect();
+    await producer.send({
+      topic: KAFKA_TOPIC,
+      messages: [
+        {
+          key: summary.correlationId || summary.sourceKey,
+          value: JSON.stringify(summary),
+        },
+      ],
+    });
+  } finally {
+    await producer.disconnect();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Handler principal (entrypoint Lambda)
 // ---------------------------------------------------------------------------
@@ -115,13 +132,12 @@ exports.handler = async (event) => {
     const payload = getBodyParsed(record.body);
 
     try {
-
       if (payload.bodyParseFailed) {
         throw new Error(payload.bodyParseFailed);
       }
 
       const { bucket, key, uploadedAt, correlationId } = payload;
-    
+
       console.log(JSON.stringify({ event: "processing_started", bucket, key, correlationId }));
     
       // 1. Download do S3: o Body vem como stream no SDK v3.
@@ -131,11 +147,11 @@ exports.handler = async (event) => {
       // 2. PutItem por linha no DynamoDB
       const recordIds = [];
       const now = new Date().toISOString();
-    
+
       for (const row of rows) {
         const id = randomUUID();
         recordIds.push(id);
-    
+
         await dynamo.send(
           new PutCommand({
             TableName: TABLE_NAME,
@@ -150,7 +166,7 @@ exports.handler = async (event) => {
           }),
         );
       }
-    
+
       console.log(
         JSON.stringify({
           event: "dynamodb_written",
@@ -160,12 +176,7 @@ exports.handler = async (event) => {
           correlationId,
         }),
       );
-    
-      // 3. Resumo na fila processada (consumida pela API NestJS)
-      if (!PROCESSED_QUEUE_URL) {
-        throw new Error("PROCESSED_QUEUE_URL não configurada");
-      }
-    
+
       const summary = {
         sourceKey: key,
         bucket,
@@ -174,16 +185,11 @@ exports.handler = async (event) => {
         processedAt: now,
         correlationId,
       };
-    
-      await sqs.send(
-        new SendMessageCommand({
-          QueueUrl: PROCESSED_QUEUE_URL,
-          MessageBody: JSON.stringify(summary),
-        }),
-      );
-    
-      console.log(JSON.stringify({ event: "processed_queue_sent", summary, correlationId }));
-    
+
+      await publishSummaryToKafka(summary);
+
+      console.log(JSON.stringify({ event: "kafka_produced", topic: KAFKA_TOPIC, summary, correlationId }));
+
       return summary;
     } catch (err) {
       // Log estruturado — aparece em /aws/lambda/csv-processor no CloudWatch

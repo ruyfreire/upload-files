@@ -4,7 +4,7 @@ import { AwsModule } from './aws/aws.module';
 import { UploadModule } from './upload/upload.module';
 import { RecordsModule } from './records/records.module';
 import { WebhookModule } from './webhook/webhook.module';
-import { ProcessedQueueConsumer } from './consumer/processed-queue.consumer';
+import { ProcessedKafkaConsumer } from './consumer/processed-kafka.consumer';
 
 @Module({
   imports: [
@@ -15,6 +15,6 @@ import { ProcessedQueueConsumer } from './consumer/processed-queue.consumer';
     RecordsModule,
     WebhookModule,
   ],
-  providers: [ProcessedQueueConsumer],
+  providers: [ProcessedKafkaConsumer],
 })
 export class AppModule {}

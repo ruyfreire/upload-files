@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# bootstrap.sh — Provisionamento IMPERATIVO dos recursos AWS no LocalStack
+# bootstrap.sh — Kafka (passo 0) + provisionamento LocalStack (imperativo)
 # =============================================================================
-# Este script cria o ambiente de estudo passo a passo via awslocal (AWS CLI).
-# É idempotente: recursos já existentes são reutilizados em vez de falhar.
-#
-# Pré-requisitos:
-#   - LocalStack rodando em http://127.0.0.1:4566
-#   - awslocal instalado
-#   - python3 (empacotamento da Lambda)
-#
-# Referência de comandos: docs/CLI-LOCALSTACK.md
+# Pré-requisito: LocalStack em http://127.0.0.1:4566
+# SKIP_KAFKA=1 — pula passo 0 (debug)
 # =============================================================================
 set -euo pipefail
 
-# --- Variáveis fixas do projeto de estudo ------------------------------------
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
@@ -22,35 +14,47 @@ export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 BUCKET="csv-uploads"
 TOPIC_NAME="csv-upload-events"
 INGEST_QUEUE="csv-ingest-queue"
-PROCESSED_QUEUE="csv-processed-queue"
 TABLE_NAME="CsvRecords"
 SECRET_NAME="study/webhook"
 LAMBDA_ROLE="csv-processor-lambda-role"
 LAMBDA_NAME="csv-processor"
 LOG_GROUP="/study/csv-pipeline"
 
-# Endpoint interno Docker — Lambda roda em container filho do LocalStack.
-# localstack-main nem sempre resolve via DNS; localhost.localstack.cloud é estável.
-# Fallback documentado no README: IP do container (docker inspect localstack-main).
-LAMBDA_ENDPOINT="${LAMBDA_ENDPOINT:-http://localhost.localstack.cloud:4566}"
+KAFKA_TOPIC="${KAFKA_TOPIC:-csv.processed}"
+KAFKA_BROKERS_LAMBDA="${KAFKA_BROKERS_LAMBDA:-host.docker.internal:19093}"
 
-# Secret padrão (troque webhookUrl pelo UUID real do webhook.site antes do teste)
+LAMBDA_ENDPOINT="${LAMBDA_ENDPOINT:-http://localhost.localstack.cloud:4566}"
 WEBHOOK_TOKEN="${WEBHOOK_TOKEN:-token-estudo}"
 WEBHOOK_URL="${WEBHOOK_URL:-https://webhook.site/853bdadd-9ebf-42b2-b33e-7d7b6a959922}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source=lib/kafka-local.sh
+source "${SCRIPT_DIR}/lib/kafka-local.sh"
+
 echo "=============================================="
-echo " Bootstrap CSV Pipeline — LocalStack (imperativo)"
+echo " Bootstrap CSV Pipeline — Kafka + LocalStack"
 echo " Região: ${AWS_DEFAULT_REGION}"
 echo "=============================================="
 
+if [[ "${SKIP_KAFKA:-0}" != "1" ]]; then
+  echo ""
+  echo "[0/10] Apache Kafka (KRaft) + tópico ${KAFKA_TOPIC}"
+  ensure_localstack_health
+  ensure_kafka_stack "${PROJECT_DIR}"
+  ensure_kafka_topic "${KAFKA_TOPIC}"
+else
+  echo ""
+  echo "[0/10] Kafka ignorado (SKIP_KAFKA=1)"
+  ensure_localstack_health
+fi
+
 # =============================================================================
-# 1. S3 — bucket para uploads CSV
+# 1. S3
 # =============================================================================
 echo ""
-echo "[1/9] S3 bucket: ${BUCKET}"
+echo "[1/10] S3 bucket: ${BUCKET}"
 if awslocal s3api head-bucket --bucket "${BUCKET}" 2>/dev/null; then
   echo "  -> Bucket já existe, reutilizando."
 else
@@ -59,10 +63,10 @@ else
 fi
 
 # =============================================================================
-# 2. SNS — tópico de eventos de upload
+# 2. SNS
 # =============================================================================
 echo ""
-echo "[2/9] SNS topic: ${TOPIC_NAME}"
+echo "[2/10] SNS topic: ${TOPIC_NAME}"
 TOPIC_ARN=$(awslocal sns create-topic --name "${TOPIC_NAME}" --output text 2>/dev/null || true)
 if [[ -z "${TOPIC_ARN}" ]]; then
   TOPIC_ARN=$(awslocal sns list-topics --query "Topics[?contains(TopicArn, '${TOPIC_NAME}')].TopicArn | [0]" --output text)
@@ -70,19 +74,14 @@ fi
 echo "  -> Topic ARN: ${TOPIC_ARN}"
 
 # =============================================================================
-# 3. SQS — filas de ingestão e processamento
+# 3. SQS — fila de ingestão
 # =============================================================================
 echo ""
-echo "[3/9] SQS queues: ${INGEST_QUEUE}, ${PROCESSED_QUEUE}"
+echo "[3/10] SQS queue: ${INGEST_QUEUE}"
 
 INGEST_URL=$(awslocal sqs get-queue-url --queue-name "${INGEST_QUEUE}" --query 'QueueUrl' --output text 2>/dev/null || true)
 if [[ -z "${INGEST_URL}" || "${INGEST_URL}" == "None" ]]; then
   INGEST_URL=$(awslocal sqs create-queue --queue-name "${INGEST_QUEUE}" --output text)
-fi
-
-PROCESSED_URL=$(awslocal sqs get-queue-url --queue-name "${PROCESSED_QUEUE}" --query 'QueueUrl' --output text 2>/dev/null || true)
-if [[ -z "${PROCESSED_URL}" || "${PROCESSED_URL}" == "None" ]]; then
-  PROCESSED_URL=$(awslocal sqs create-queue --queue-name "${PROCESSED_QUEUE}" --output text)
 fi
 
 INGEST_ARN=$(awslocal sqs get-queue-attributes \
@@ -90,16 +89,20 @@ INGEST_ARN=$(awslocal sqs get-queue-attributes \
   --attribute-names QueueArn \
   --query 'Attributes.QueueArn' --output text)
 
-echo "  -> Ingest URL:    ${INGEST_URL}"
-echo "  -> Processed URL: ${PROCESSED_URL}"
+echo "  -> Ingest URL: ${INGEST_URL}"
+
+LEGACY_PROCESSED_QUEUE="csv-processed-queue"
+LEGACY_URL=$(awslocal sqs get-queue-url --queue-name "${LEGACY_PROCESSED_QUEUE}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
+if [[ -n "${LEGACY_URL}" && "${LEGACY_URL}" != "None" ]]; then
+  awslocal sqs delete-queue --queue-url "${LEGACY_URL}" 2>/dev/null || true
+  echo "  -> Fila legada ${LEGACY_PROCESSED_QUEUE} removida (substituída por Kafka)."
+fi
 
 # =============================================================================
-# 4. SNS → SQS — subscription com RawMessageDelivery
-#    RawMessageDelivery=true entrega o JSON do SNS direto no body da fila
-#    (sem envelope SNS), facilitando o parse na Lambda.
+# 4. SNS → SQS
 # =============================================================================
 echo ""
-echo "[4/9] SNS → SQS subscription (RawMessageDelivery)"
+echo "[4/10] SNS → SQS subscription (RawMessageDelivery)"
 
 EXISTING_SUB=$(awslocal sns list-subscriptions-by-topic \
   --topic-arn "${TOPIC_ARN}" \
@@ -118,7 +121,6 @@ else
   echo "  -> Subscription criada: ${SUB_ARN}"
 fi
 
-# Policy na fila (boa prática AWS real; LocalStack costuma funcionar sem)
 POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
@@ -137,10 +139,10 @@ awslocal sqs set-queue-attributes \
   --attributes Policy="${POLICY}" 2>/dev/null || true
 
 # =============================================================================
-# 5. DynamoDB — tabela CsvRecords
+# 5. DynamoDB
 # =============================================================================
 echo ""
-echo "[5/9] DynamoDB table: ${TABLE_NAME}"
+echo "[5/10] DynamoDB table: ${TABLE_NAME}"
 
 if awslocal dynamodb describe-table --table-name "${TABLE_NAME}" >/dev/null 2>&1; then
   echo "  -> Tabela já existe, reutilizando."
@@ -154,10 +156,10 @@ else
 fi
 
 # =============================================================================
-# 6. Secrets Manager — credenciais do webhook
+# 6. Secrets Manager
 # =============================================================================
 echo ""
-echo "[6/9] Secrets Manager: ${SECRET_NAME}"
+echo "[6/10] Secrets Manager: ${SECRET_NAME}"
 
 SECRET_JSON=$(cat <<EOF
 {"token":"${WEBHOOK_TOKEN}","webhookUrl":"${WEBHOOK_URL}"}
@@ -176,15 +178,11 @@ else
   echo "  -> Secret criado."
 fi
 
-SECRET_ARN=$(awslocal secretsmanager describe-secret \
-  --secret-id "${SECRET_NAME}" \
-  --query 'ARN' --output text)
-
 # =============================================================================
-# 7. IAM — role da Lambda (estudo; LocalStack não aplica enforcement forte)
+# 7. IAM
 # =============================================================================
 echo ""
-echo "[7/9] IAM role: ${LAMBDA_ROLE}"
+echo "[7/10] IAM role: ${LAMBDA_ROLE}"
 
 TRUST_POLICY='{
   "Version": "2012-10-17",
@@ -206,7 +204,6 @@ fi
 
 ROLE_ARN=$(awslocal iam get-role --role-name "${LAMBDA_ROLE}" --query 'Role.Arn' --output text)
 
-# Policy inline com permissões mínimas para o fluxo
 INLINE_POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
@@ -220,11 +217,6 @@ INLINE_POLICY=$(cat <<EOF
       "Effect": "Allow",
       "Action": ["dynamodb:PutItem"],
       "Resource": "arn:aws:dynamodb:${AWS_DEFAULT_REGION}:000000000000:table/${TABLE_NAME}"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["sqs:SendMessage"],
-      "Resource": "arn:aws:sqs:${AWS_DEFAULT_REGION}:000000000000:${PROCESSED_QUEUE}"
     },
     {
       "Effect": "Allow",
@@ -243,14 +235,16 @@ awslocal iam put-role-policy \
 echo "  -> Policy inline aplicada."
 
 # =============================================================================
-# 8. Lambda — empacota, cria função e conecta fila ingest → Lambda
+# 8. Lambda
 # =============================================================================
 echo ""
-echo "[8/9] Lambda: ${LAMBDA_NAME}"
+echo "[8/10] Lambda: ${LAMBDA_NAME}"
 
 cd "${PROJECT_DIR}/lambda"
 npm run package
 ZIP_FILE="${PROJECT_DIR}/lambda/dist/function.zip"
+
+LAMBDA_ENV="AWS_ENDPOINT_URL=${LAMBDA_ENDPOINT},DYNAMODB_TABLE=${TABLE_NAME},KAFKA_BROKERS=${KAFKA_BROKERS_LAMBDA},KAFKA_TOPIC=${KAFKA_TOPIC},AWS_REGION=${AWS_DEFAULT_REGION}"
 
 if awslocal lambda get-function --function-name "${LAMBDA_NAME}" >/dev/null 2>&1; then
   awslocal lambda update-function-code \
@@ -258,7 +252,7 @@ if awslocal lambda get-function --function-name "${LAMBDA_NAME}" >/dev/null 2>&1
     --zip-file "fileb://${ZIP_FILE}" >/dev/null
   awslocal lambda update-function-configuration \
     --function-name "${LAMBDA_NAME}" \
-    --environment "Variables={AWS_ENDPOINT_URL=${LAMBDA_ENDPOINT},DYNAMODB_TABLE=${TABLE_NAME},PROCESSED_QUEUE_URL=${PROCESSED_URL},AWS_REGION=${AWS_DEFAULT_REGION}}" >/dev/null
+    --environment "Variables={${LAMBDA_ENV}}" >/dev/null
   echo "  -> Função atualizada."
 else
   awslocal lambda create-function \
@@ -268,14 +262,12 @@ else
     --handler handler.handler \
     --zip-file "fileb://${ZIP_FILE}" \
     --timeout 30 \
-    --environment "Variables={AWS_ENDPOINT_URL=${LAMBDA_ENDPOINT},DYNAMODB_TABLE=${TABLE_NAME},PROCESSED_QUEUE_URL=${PROCESSED_URL},AWS_REGION=${AWS_DEFAULT_REGION}}" >/dev/null
+    --environment "Variables={${LAMBDA_ENV}}" >/dev/null
   echo "  -> Função criada."
 fi
 
-# Aguarda função sair de Pending (necessário no LocalStack)
 awslocal lambda wait function-active-v2 --function-name "${LAMBDA_NAME}" 2>/dev/null || sleep 3
 
-# Event source mapping: fila ingest dispara a Lambda automaticamente
 EXISTING_ESM=$(awslocal lambda list-event-source-mappings \
   --function-name "${LAMBDA_NAME}" \
   --query "EventSourceMappings[?EventSourceArn=='${INGEST_ARN}'].UUID | [0]" \
@@ -294,10 +286,10 @@ else
 fi
 
 # =============================================================================
-# 9. CloudWatch Logs — log group da API (Lambda cria /aws/lambda/ automaticamente)
+# 9. CloudWatch Logs
 # =============================================================================
 echo ""
-echo "[9/9] CloudWatch Log Group: ${LOG_GROUP}"
+echo "[9/10] CloudWatch Log Group: ${LOG_GROUP}"
 
 if awslocal logs describe-log-groups --log-group-name-prefix "${LOG_GROUP}" \
   --query "logGroups[?logGroupName=='${LOG_GROUP}']" --output text | grep -q "${LOG_GROUP}"; then
@@ -308,11 +300,10 @@ else
 fi
 
 # =============================================================================
-# Outputs — copie para api/.env
+# Outputs
 # =============================================================================
 echo ""
-echo "=============================================="
-echo " Bootstrap concluído! Copie para api/.env:"
+echo "[10/10] Concluído — copie para api/.env:"
 echo "=============================================="
 cat <<EOF
 
@@ -324,13 +315,16 @@ AWS_SECRET_ACCESS_KEY=test
 S3_BUCKET=${BUCKET}
 SNS_TOPIC_ARN=${TOPIC_ARN}
 INGEST_QUEUE_URL=${INGEST_URL}
-PROCESSED_QUEUE_URL=${PROCESSED_URL}
 DYNAMODB_TABLE=${TABLE_NAME}
 SECRET_NAME=${SECRET_NAME}
 LOG_GROUP_NAME=${LOG_GROUP}
 PORT=3000
 
+KAFKA_BROKERS=localhost:19092
+KAFKA_TOPIC=${KAFKA_TOPIC}
+KAFKA_GROUP_ID=csv-processed-api
+
 EOF
 
-echo "Dica: defina WEBHOOK_URL=https://webhook.site/SEU-UUID antes de rodar o bootstrap"
-echo "      ou atualize o secret manualmente com awslocal secretsmanager put-secret-value"
+echo "Kafka UI: http://localhost:8080"
+echo "Dica: WEBHOOK_URL=https://webhook.site/SEU-UUID antes do bootstrap ou atualize o secret."
