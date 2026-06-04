@@ -1,8 +1,8 @@
-import { UploadSection } from '@/components/UploadSection';
-import { RecordsTable } from '@/components/RecordsTable';
-import { useRecords } from '@/hooks/useRecords';
-import { useUploadCsv } from '@/hooks/useUploadCsv';
-import { useEffect, useRef } from 'react';
+import { UploadSection } from "@/components/UploadSection";
+import { RecordsTable } from "@/components/RecordsTable";
+import { useRecords } from "@/hooks/useRecords";
+import { useUploadCsv } from "@/hooks/useUploadCsv";
+import { useEffect, useRef } from "react";
 
 function App() {
   const upload = useUploadCsv();
@@ -24,9 +24,10 @@ function App() {
   return (
     <div className="mx-auto min-h-svh max-w-5xl px-4 py-8">
       <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Pipeline CSV — Estudo AWS</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Pipeline CSV</h1>
         <p className="text-muted-foreground mt-1 text-sm">
-          Upload, processamento assíncrono (S3 → SNS → Lambda → DynamoDB) e listagem em tempo real.
+          Upload, processamento assíncrono (S3 → SNS → Lambda → DynamoDB) e
+          listagem em tempo real.
         </p>
       </header>
 
