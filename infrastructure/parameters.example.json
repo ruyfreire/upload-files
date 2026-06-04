@@ -1,0 +1,22 @@
+[
+  {
+    "ParameterKey": "LambdaS3Bucket",
+    "ParameterValue": "csv-cfn-artifacts"
+  },
+  {
+    "ParameterKey": "LambdaS3Key",
+    "ParameterValue": "csv-processor.zip"
+  },
+  {
+    "ParameterKey": "WebhookUrl",
+    "ParameterValue": "https://webhook.site/SEU-UUID"
+  },
+  {
+    "ParameterKey": "WebhookToken",
+    "ParameterValue": "token-estudo"
+  },
+  {
+    "ParameterKey": "LambdaEndpoint",
+    "ParameterValue": "http://localhost.localstack.cloud:4566"
+  }
+]

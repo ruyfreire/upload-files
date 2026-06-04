@@ -1,0 +1,238 @@
+# =============================================================================
+# CloudFormation — pipeline CSV de estudo (LocalStack / AWS)
+# =============================================================================
+# Espelha os mesmos recursos do scripts/bootstrap.sh, mas de forma DECLARATIVA.
+# Sem SAM/CDK transforms — YAML puro para compatibilidade com LocalStack Hobby.
+#
+# Deploy: scripts/deploy-cfn.sh (empacota Lambda → S3 → cloudformation deploy)
+# =============================================================================
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Pipeline CSV de estudo — S3, SNS, SQS, Lambda, DynamoDB, Secrets Manager
+
+# -----------------------------------------------------------------------------
+# Parâmetros — valores injetados pelo deploy-cfn.sh
+# -----------------------------------------------------------------------------
+Parameters:
+  LambdaS3Bucket:
+    Type: String
+    Description: Bucket S3 onde o zip da Lambda foi enviado
+    Default: csv-cfn-artifacts
+
+  LambdaS3Key:
+    Type: String
+    Description: Chave S3 do zip da Lambda
+    Default: csv-processor.zip
+
+  WebhookUrl:
+    Type: String
+    Description: URL do webhook.site (ex. https://webhook.site/SEU-UUID)
+    Default: https://webhook.site/853bdadd-9ebf-42b2-b33e-7d7b6a959922
+
+  WebhookToken:
+    Type: String
+    Description: Token Bearer enviado no header Authorization
+    Default: token-estudo
+
+  LambdaEndpoint:
+    Type: String
+    Description: Endpoint AWS para a Lambda (rede Docker interna)
+    Default: http://localhost.localstack.cloud:4566
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # S3 — armazena uploads CSV
+  # ---------------------------------------------------------------------------
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: csv-uploads
+
+  # Bucket auxiliar para artefatos CFN (zip da Lambda)
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref LambdaS3Bucket
+    DeletionPolicy: Delete
+
+  # ---------------------------------------------------------------------------
+  # SNS — tópico de eventos de upload (publicado pela API NestJS)
+  # ---------------------------------------------------------------------------
+  UploadTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: csv-upload-events # Tópico que publica os eventos quando upload é realizado
+
+  # ---------------------------------------------------------------------------
+  # SQS — fila de ingestão (SNS → Lambda) e fila processada (Lambda → API)
+  # ---------------------------------------------------------------------------
+  IngestQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: csv-ingest-queue # Fila que recebe os eventos quando upload é realizado
+
+  ProcessedQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: csv-processed-queue # Fila que recebe os eventos quando o processamento é realizado
+
+  # Permite SNS publicar na fila de ingestão (necessário na AWS real)
+  IngestQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref IngestQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt IngestQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref UploadTopic
+
+# Aqui é a subscription do SNS para a fila, é o que permite que o SNS publique na fila SQS `csv-ingest-queue`
+  IngestSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref UploadTopic
+      Protocol: sqs
+      Endpoint: !GetAtt IngestQueue.Arn
+      RawMessageDelivery: true
+
+  # ---------------------------------------------------------------------------
+  # DynamoDB — uma linha CSV = um item (PK id)
+  # ---------------------------------------------------------------------------
+  CsvRecordsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: CsvRecords
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  # ---------------------------------------------------------------------------
+  # Secrets Manager — URL e token do webhook (lido pela API NestJS)
+  # ---------------------------------------------------------------------------
+  WebhookSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: study/webhook
+      SecretString: !Sub |
+        {"token":"${WebhookToken}","webhookUrl":"${WebhookUrl}"}
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Logs — rastreio da API (Lambda cria /aws/lambda/ sozinha)
+  # ---------------------------------------------------------------------------
+  PipelineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /study/csv-pipeline
+      RetentionInDays: 7
+
+  # ---------------------------------------------------------------------------
+  # IAM — role da Lambda com permissões mínimas
+  # ---------------------------------------------------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: csv-processor-lambda-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: csv-processor-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${UploadBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt CsvRecordsTable.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt ProcessedQueue.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  # ---------------------------------------------------------------------------
+  # Lambda — processa CSV (código via S3, padrão híbrido CFN)
+  # ---------------------------------------------------------------------------
+  CsvProcessorFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaExecutionRole
+    Properties:
+      FunctionName: csv-processor
+      Runtime: nodejs18.x
+      Handler: handler.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Ref LambdaS3Key
+      Environment:
+        Variables:
+          AWS_ENDPOINT_URL: !Ref LambdaEndpoint
+          DYNAMODB_TABLE: !Ref CsvRecordsTable
+          PROCESSED_QUEUE_URL: !Ref ProcessedQueue
+          AWS_REGION: !Ref AWS::Region
+
+  IngestEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      FunctionName: !Ref CsvProcessorFunction
+      EventSourceArn: !GetAtt IngestQueue.Arn
+      BatchSize: 1
+      Enabled: true
+
+# -----------------------------------------------------------------------------
+# Outputs — copie para api/.env após deploy
+# -----------------------------------------------------------------------------
+Outputs:
+  BucketName:
+    Description: Bucket S3 de uploads
+    Value: !Ref UploadBucket
+
+  SnsTopicArn:
+    Description: ARN do tópico SNS
+    Value: !Ref UploadTopic
+
+  IngestQueueUrl:
+    Description: URL da fila de ingestão
+    Value: !Ref IngestQueue
+
+  ProcessedQueueUrl:
+    Description: URL da fila processada (consumer da API)
+    Value: !Ref ProcessedQueue
+
+  DynamoTableName:
+    Description: Nome da tabela DynamoDB
+    Value: !Ref CsvRecordsTable
+
+  SecretArn:
+    Description: ARN do secret do webhook
+    Value: !Ref WebhookSecret
+
+  LogGroupName:
+    Description: Log group da API
+    Value: !Ref PipelineLogGroup
